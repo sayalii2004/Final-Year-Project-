@@ -239,7 +239,7 @@ http://localhost:8000/docs
 ## 👥 Team
 
 Final Year Project — KrushiSaathi
-Department of Computer Engineering
+Department of Information Technology
 
 ---
 
