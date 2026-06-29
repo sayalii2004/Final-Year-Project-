@@ -9,6 +9,7 @@ import { User, MapPin, Crop, Edit, Save, X, Camera, Mail, Phone } from 'lucide-r
 import { useLanguage } from '@/contexts/LanguageContext';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAuth } from '@/contexts/AuthContext'; // ✅ FIX 1: import auth context
 
 interface UserProfile {
   name: string;
@@ -22,42 +23,84 @@ interface UserProfile {
   avatar?: string;
 }
 
+// ✅ FIX 2: helper to map AuthContext User → local UserProfile shape
+function userToProfile(user: ReturnType<typeof useAuth>['user']): UserProfile {
+  if (!user) {
+    return {
+      name: '',
+      occupation: '',
+      location: '',
+      farmSize: '',
+      email: '',
+      phone: '',
+      bio: '',
+      crops: [],
+      avatar: undefined,
+    };
+  }
+  return {
+    name: user.name ?? '',
+    occupation: user.farmer_type ?? '',
+    location: user.place ?? user.village ?? '',
+    farmSize: user.land_area != null ? String(user.land_area) : '',
+    email: user.email ?? '',
+    phone: user.phone ?? '',
+    bio: user.bio ?? '',
+    crops: user.crops_grown ?? [],
+    avatar: undefined,
+  };
+}
+
 const Profile: React.FC = () => {
   const { t } = useLanguage();
+  const { user, updateProfile } = useAuth(); // ✅ FIX 3: consume auth context
+
   const [isEditing, setIsEditing] = useState(false);
-  const [profile, setProfile] = useState<UserProfile>({
-    name: 'Ram Kumar',
-    occupation: 'Wheat Farmer',
-    location: 'Punjab, India',
-    farmSize: '50 acres',
-    email: 'ram.kumar@example.com',
-    phone: '+91 98765 43210',
-    bio: 'Experienced farmer with 20+ years in wheat cultivation. Passionate about sustainable farming practices.',
-    crops: ['Wheat', 'Rice', 'Cotton'],
-    avatar: undefined,
-  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // ✅ FIX 4: derive profile from auth user, not hardcoded defaults
+  const profile = userToProfile(user);
   const [editedProfile, setEditedProfile] = useState<UserProfile>(profile);
 
+  // ✅ FIX 5: sync edits if user changes in context (e.g. after re-login)
   useEffect(() => {
-    // In production, fetch from backend
-    // fetchUserProfile().then(setProfile);
-  }, []);
+    setEditedProfile(userToProfile(user));
+  }, [user]);
 
   const handleEdit = () => {
     setEditedProfile(profile);
+    setSaveError(null);
     setIsEditing(true);
   };
 
   const handleCancel = () => {
     setEditedProfile(profile);
+    setSaveError(null);
     setIsEditing(false);
   };
 
-  const handleSave = () => {
-    setProfile(editedProfile);
-    setIsEditing(false);
-    // In production, save to backend
-    // saveUserProfile(editedProfile);
+  // ✅ FIX 6: handleSave actually calls updateProfile() → hits PUT /api/auth/me
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await updateProfile({
+        name: editedProfile.name,
+        farmer_type: editedProfile.occupation,
+        place: editedProfile.location,
+        land_area: editedProfile.farmSize ? Number(editedProfile.farmSize) : undefined,
+        email: editedProfile.email,
+        phone: editedProfile.phone,
+        bio: editedProfile.bio,
+        crops_grown: editedProfile.crops,
+      });
+      setIsEditing(false);
+    } catch (err: any) {
+      setSaveError(err.message ?? 'Failed to save. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleInputChange = (field: keyof UserProfile, value: string) => {
@@ -66,10 +109,7 @@ const Profile: React.FC = () => {
 
   const handleCropAdd = (crop: string) => {
     if (crop && !editedProfile.crops.includes(crop)) {
-      setEditedProfile(prev => ({
-        ...prev,
-        crops: [...prev.crops, crop],
-      }));
+      setEditedProfile(prev => ({ ...prev, crops: [...prev.crops, crop] }));
     }
   };
 
@@ -79,6 +119,9 @@ const Profile: React.FC = () => {
       crops: prev.crops.filter(c => c !== crop),
     }));
   };
+
+  // ✅ FIX 7: use editedProfile.crops during editing so removals show immediately
+  const displayCrops = isEditing ? editedProfile.crops : profile.crops;
 
   const availableCrops = ['Wheat', 'Rice', 'Cotton', 'Sugarcane', 'Potato', 'Tomato', 'Onion', 'Corn'];
 
@@ -101,17 +144,24 @@ const Profile: React.FC = () => {
           </Button>
         ) : (
           <div className="flex gap-2">
-            <Button variant="outline" onClick={handleCancel} className="flex items-center gap-2">
+            <Button variant="outline" onClick={handleCancel} disabled={isSaving} className="flex items-center gap-2">
               <X className="h-4 w-4" />
               {t('pages.profile.cancel', {})}
             </Button>
-            <Button onClick={handleSave} className="flex items-center gap-2">
+            <Button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2">
               <Save className="h-4 w-4" />
-              {t('pages.profile.save', {})}
+              {isSaving ? 'Saving...' : t('pages.profile.save', {})}
             </Button>
           </div>
         )}
       </div>
+
+      {/* ✅ FIX 8: show save error if backend rejects */}
+      {saveError && (
+        <div className="rounded-md bg-destructive/10 border border-destructive/30 text-destructive px-4 py-2 text-sm">
+          {saveError}
+        </div>
+      )}
 
       <div className="grid gap-6 md:grid-cols-3">
         {/* Profile Card */}
@@ -120,9 +170,9 @@ const Profile: React.FC = () => {
             <div className="flex flex-col items-center space-y-4">
               <div className="relative">
                 <Avatar className="h-24 w-24 border-4 border-primary">
-                  <AvatarImage src={profile.avatar} alt={profile.name} />
+                  <AvatarImage src={editedProfile.avatar ?? profile.avatar} alt={profile.name} />
                   <AvatarFallback className="text-2xl bg-primary text-primary-foreground">
-                    {profile.name.split(' ').map(n => n[0]).join('')}
+                    {profile.name.split(' ').map(n => n[0]).join('') || <User className="h-8 w-8" />}
                   </AvatarFallback>
                 </Avatar>
                 {isEditing && (
@@ -130,7 +180,6 @@ const Profile: React.FC = () => {
                     size="icon"
                     className="absolute bottom-0 right-0 rounded-full h-8 w-8"
                     onClick={() => {
-                      // Handle avatar upload
                       const input = document.createElement('input');
                       input.type = 'file';
                       input.accept = 'image/*';
@@ -158,16 +207,17 @@ const Profile: React.FC = () => {
                   className="text-center font-bold text-lg"
                 />
               ) : (
-                <h2 className="text-2xl font-bold">{profile.name}</h2>
+                <h2 className="text-2xl font-bold">{profile.name || '—'}</h2>
               )}
               {isEditing ? (
                 <Input
                   value={editedProfile.occupation}
                   onChange={(e) => handleInputChange('occupation', e.target.value)}
                   className="text-center text-muted-foreground"
+                  placeholder="e.g. Wheat Farmer"
                 />
               ) : (
-                <p className="text-muted-foreground">{profile.occupation}</p>
+                <p className="text-muted-foreground">{profile.occupation || '—'}</p>
               )}
             </div>
           </CardHeader>
@@ -179,9 +229,10 @@ const Profile: React.FC = () => {
                   value={editedProfile.location}
                   onChange={(e) => handleInputChange('location', e.target.value)}
                   className="flex-1"
+                  placeholder="e.g. Punjab, India"
                 />
               ) : (
-                <span className="text-muted-foreground">{profile.location}</span>
+                <span className="text-muted-foreground">{profile.location || '—'}</span>
               )}
             </div>
             <div className="flex items-center gap-2 text-sm">
@@ -191,9 +242,13 @@ const Profile: React.FC = () => {
                   value={editedProfile.farmSize}
                   onChange={(e) => handleInputChange('farmSize', e.target.value)}
                   className="flex-1"
+                  placeholder="e.g. 50"
+                  type="number"
                 />
               ) : (
-                <span className="text-muted-foreground">{profile.farmSize}</span>
+                <span className="text-muted-foreground">
+                  {profile.farmSize ? `${profile.farmSize} acres` : '—'}
+                </span>
               )}
             </div>
             <div className="flex items-center gap-2 text-sm">
@@ -206,7 +261,7 @@ const Profile: React.FC = () => {
                   className="flex-1"
                 />
               ) : (
-                <span className="text-muted-foreground">{profile.email}</span>
+                <span className="text-muted-foreground">{profile.email || '—'}</span>
               )}
             </div>
             <div className="flex items-center gap-2 text-sm">
@@ -219,7 +274,7 @@ const Profile: React.FC = () => {
                   className="flex-1"
                 />
               ) : (
-                <span className="text-muted-foreground">{profile.phone}</span>
+                <span className="text-muted-foreground">{profile.phone || '—'}</span>
               )}
             </div>
           </CardContent>
@@ -246,7 +301,7 @@ const Profile: React.FC = () => {
                   rows={4}
                 />
               ) : (
-                <p className="mt-2 text-sm text-muted-foreground">{profile.bio}</p>
+                <p className="mt-2 text-sm text-muted-foreground">{profile.bio || '—'}</p>
               )}
             </div>
 
@@ -254,7 +309,8 @@ const Profile: React.FC = () => {
             <div>
               <Label className="text-base font-medium">{t('pages.profile.crops', {})}</Label>
               <div className="mt-2 flex flex-wrap gap-2">
-                {profile.crops.map((crop) => (
+                {/* ✅ FIX 7 applied here: use displayCrops so edits are reflected immediately */}
+                {displayCrops.map((crop) => (
                   <Badge key={crop} variant="secondary" className="text-sm">
                     {crop}
                     {isEditing && (
@@ -267,6 +323,9 @@ const Profile: React.FC = () => {
                     )}
                   </Badge>
                 ))}
+                {displayCrops.length === 0 && (
+                  <span className="text-sm text-muted-foreground">No crops added yet.</span>
+                )}
               </div>
               {isEditing && (
                 <Select onValueChange={handleCropAdd}>
@@ -301,7 +360,7 @@ const Profile: React.FC = () => {
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-primary">50</div>
+                <div className="text-2xl font-bold text-primary">{profile.farmSize || '—'}</div>
                 <div className="text-xs text-muted-foreground">
                   {t('pages.profile.acres', {})}
                 </div>
@@ -315,4 +374,3 @@ const Profile: React.FC = () => {
 };
 
 export default Profile;
-
